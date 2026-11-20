@@ -11,25 +11,25 @@ jobs:
       - name: Descargar GR33N
         uses: actions/checkout@v4
 
-      - name: Descargar ps3toolchain
-        uses: actions/checkout@v4
-        with:
-          repository: ps3dev/ps3toolchain
-          path: ps3toolchain-sdk
-
-      - name: Instalar herramientas y SDK de PS3
+      - name: Instalar herramientas y SDK completo de PS3
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf automake bison flex texinfo libncurses5-dev gcc g++ make wget libelf-dev python3-dev zlib1g-dev libtool libtool-bin git subversion libgmp-dev libmpfr-dev libmpc-dev libssl-dev cmake pkg-config curl
-          sudo mkdir -p /usr/local/ps3dev
-          sudo chmod -R 777 /usr/local/ps3dev
-          cd ps3toolchain-sdk
-          export PS3DEV=/usr/local/ps3dev
-          export PSL1GHT=$PS3DEV
-          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
-          ./toolchain.sh 1 2 3 4 5 6
-          cp -rn /usr/local/ps3dev/psl1ght/ppu/* /usr/local/ps3dev/ppu/ 2>/dev/null || true
-          cp -rn /usr/local/ps3dev/psl1ght/spu/* /usr/local/ps3dev/spu/ 2>/dev/null || true
+          sudo apt-get install -y build-essential cmake pkg-config curl wget git libelf-dev zlib1g-dev libssl-dev libgmp-dev libmpfr-dev libmpc-dev python3
+          sudo mkdir -p /usr/local/ps3dev /tmp/ps3extract
+          sudo chmod -R 777 /usr/local/ps3dev /tmp/ps3extract
+          URL=$(curl -s https://github.com | grep "browser_download_url" | grep -i "linux" | head -n 1 | cut -d '"' -f 4)
+          if [ -z "$URL" ]; then
+            URL=$(curl -s https://github.com | grep "browser_download_url" | grep -i "linux" | head -n 1 | cut -d '"' -f 4)
+          fi
+          curl -L "$URL" -o /tmp/ps3dev.tar.gz
+          tar -xzf /tmp/ps3dev.tar.gz -C /tmp/ps3extract
+          if [ -d "/tmp/ps3extract/usr/local/ps3dev" ]; then
+            cp -rn /tmp/ps3extract/usr/local/ps3dev/* /usr/local/ps3dev/
+          elif [ -d "/tmp/ps3extract/ps3dev" ]; then
+            cp -rn /tmp/ps3extract/ps3dev/* /usr/local/ps3dev/
+          else
+            cp -rn /tmp/ps3extract/* /usr/local/ps3dev/
+          fi
 
       - name: Compilar dependencias en orden
         run: |
