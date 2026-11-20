@@ -16,16 +16,51 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /usr/local/ps3dev
-          key: ps3dev-psl1ght-v1
+          key: ps3dev-psl1ght-v2
 
-      - name: Instalar herramientas
+      - name: Descargar ps3toolchain
+        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ps3dev/ps3toolchain
+          path: ps3toolchain-sdk
+
+      - name: Descargar PSL1GHT oficial
+        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ps3dev/PSL1GHT
+          path: psl1ght-repo
+
+      - name: Instalar herramientas y SDK de PS3
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake bison flex texinfo libncurses5-dev gcc g++ make wget libelf-dev python3-dev zlib1g-dev libtool libtool-bin git subversion libgmp-dev libmpfr-dev libmpc-dev libssl-dev cmake pkg-config curl
+          sudo mkdir -p /usr/local/ps3dev
           sudo chmod -R 777 /usr/local/ps3dev
+          export PS3DEV=/usr/local/ps3dev
+          export PSL1GHT=$PS3DEV
+          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
+          if [ "${{ steps.cache-ps3dev.outputs.cache-hit }}" != "true" ]; then
+            cd ps3toolchain-sdk
+            ./toolchain.sh 1 2 3 4 5 6
+            cd ../psl1ght-repo
+            make install-ctrl
+            make
+            make install
+          fi
 
-      - name: Crear shim pthread.h y habilitar usrsctp
+      - name: Guardar caché del SDK de PS3
+        if: always() && steps.cache-ps3dev.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /usr/local/ps3dev
+          key: ps3dev-psl1ght-v2
+
+      - name: Crear shim pthread.h y libpthread.a para PSL1GHT
         run: |
+          export PS3DEV=/usr/local/ps3dev
+          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
           cat << 'EOF' > /usr/local/ps3dev/ppu/include/pthread.h
           #ifndef _PS3_PTHREAD_SHIM_H_
           #define _PS3_PTHREAD_SHIM_H_
@@ -39,16 +74,17 @@ jobs:
           typedef struct { int stacksize; int prio; } pthread_attr_t;
           typedef sys_mutex_t pthread_mutex_t;
           typedef int pthread_mutexattr_t;
-          typedef sys_cond_t pthread_cond_t;
+          typedef struct { sys_cond_t cond; sys_mutex_t mutex; int init; } pthread_cond_t;
           typedef int pthread_condattr_t;
           typedef sys_mutex_t pthread_rwlock_t;
           typedef int pthread_rwlockattr_t;
 
           #define PTHREAD_MUTEX_INITIALIZER 0
-          #define PTHREAD_COND_INITIALIZER 0
+          #define PTHREAD_COND_INITIALIZER {0, 0, 0}
           #define PTHREAD_RWLOCK_INITIALIZER 0
 
           static inline int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a) {
+            (void)a;
             sys_mutex_attr_t attr;
             sysMutexAttrInitialize(attr);
             return sysMutexCreate(m, &attr);
@@ -58,25 +94,46 @@ jobs:
           static inline int pthread_mutex_trylock(pthread_mutex_t *m) { return sysMutexTryLock(*m); }
           static inline int pthread_mutex_unlock(pthread_mutex_t *m) { return sysMutexUnlock(*m); }
 
-          static inline int pthread_rwlock_init(pthread_rwlock_t *rw, const pthread_rwlockattr_t *a) { return pthread_mutex_init(rw, NULL); }
+          static inline int pthread_rwlock_init(pthread_rwlock_t *rw, const pthread_rwlockattr_t *a) { return pthread_mutex_init(rw, a); }
           static inline int pthread_rwlock_destroy(pthread_rwlock_t *rw) { return pthread_mutex_destroy(rw); }
           static inline int pthread_rwlock_rdlock(pthread_rwlock_t *rw) { return pthread_mutex_lock(rw); }
           static inline int pthread_rwlock_wrlock(pthread_rwlock_t *rw) { return pthread_mutex_lock(rw); }
           static inline int pthread_rwlock_unlock(pthread_rwlock_t *rw) { return pthread_mutex_unlock(rw); }
 
           static inline int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *a) {
-            sys_cond_attr_t attr;
-            sysCondAttrInitialize(attr);
-            return sysCondCreate(c, 0, &attr);
+            (void)a;
+            sys_mutex_attr_t mattr;
+            sys_cond_attr_t cattr;
+            sysMutexAttrInitialize(mattr);
+            sysMutexCreate(&c->mutex, &mattr);
+            sysCondAttrInitialize(cattr);
+            c->init = 1;
+            return sysCondCreate(&c->cond, c->mutex, &cattr);
           }
-          static inline int pthread_cond_destroy(pthread_cond_t *c) { return sysCondDestroy(*c); }
-          static inline int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) { return sysCondWait(*c, 0); }
-          static inline int pthread_cond_signal(pthread_cond_t *c) { return sysCondSignal(*c); }
-          static inline int pthread_cond_broadcast(pthread_cond_t *c) { return sysCondBroadcast(*c); }
+          static inline int pthread_cond_destroy(pthread_cond_t *c) {
+            int r = sysCondDestroy(c->cond);
+            sysMutexDestroy(c->mutex);
+            return r;
+          }
+          static inline int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
+            if (!c->init) pthread_cond_init(c, 0);
+            sysMutexUnlock(*m);
+            int r = sysCondWait(c->cond, 0);
+            sysMutexLock(*m, 0);
+            return r;
+          }
+          static inline int pthread_cond_signal(pthread_cond_t *c) {
+            if (!c->init) pthread_cond_init(c, 0);
+            return sysCondSignal(c->cond);
+          }
+          static inline int pthread_cond_broadcast(pthread_cond_t *c) {
+            if (!c->init) pthread_cond_init(c, 0);
+            return sysCondBroadcast(c->cond);
+          }
 
           struct _ps3_pt_wrap { void *(*fn)(void *); void *arg; };
-          static void _ps3_pt_entry(void *p) {
-            struct _ps3_pt_wrap *w = (struct _ps3_pt_wrap *)p;
+          static void _ps3_pt_entry(u64 p) {
+            struct _ps3_pt_wrap *w = (struct _ps3_pt_wrap *)(uintptr_t)p;
             void *(*fn)(void *) = w->fn;
             void *arg = w->arg;
             free(w);
@@ -84,17 +141,28 @@ jobs:
             sysThreadExit(0);
           }
           static inline int pthread_create(pthread_t *t, const pthread_attr_t *a, void *(*fn)(void *), void *arg) {
+            (void)a;
             struct _ps3_pt_wrap *w = (struct _ps3_pt_wrap *)malloc(sizeof(*w));
             if (!w) return ENOMEM;
             w->fn = fn; w->arg = arg;
-            return sysThreadCreate(t, _ps3_pt_entry, w, 1000, 0x10000, THREAD_JOINABLE, (char *)"sctp");
+            return sysThreadCreate(t, _ps3_pt_entry, (u64)(uintptr_t)w, 1000, 0x10000, THREAD_JOINABLE, (char *)"sctp");
           }
-          static inline int pthread_join(pthread_t t, void **ret) { u64 v; return sysThreadJoin(t, &v); }
-          static inline pthread_t pthread_self(void) { sys_ppu_thread_t id; sysThreadGetId(&id); return id; }
+          static inline int pthread_join(pthread_t t, void **ret) {
+            u64 v = 0;
+            int r = sysThreadJoin(t, &v);
+            if (ret) *ret = (void *)(uintptr_t)v;
+            return r;
+          }
+          static inline pthread_t pthread_self(void) {
+            sys_ppu_thread_t id;
+            sysThreadGetId(&id);
+            return id;
+          }
           #endif
           EOF
-          cat deps/build-usrsctp.sh
-          sed -i 's/exit 1/# exit 1/g' deps/build-usrsctp.sh
+          echo "void _ps3_pthread_dummy(void) {}" > /tmp/pt_dummy.c
+          ppu-gcc -c /tmp/pt_dummy.c -o /tmp/pt_dummy.o
+          ppu-ar rcs /usr/local/ps3dev/ppu/lib/libpthread.a /tmp/pt_dummy.o
 
       - name: Compilar dependencias en orden
         run: |
