@@ -13,7 +13,7 @@ jobs:
 
       - name: Restaurar caché del SDK de PS3
         id: cache-ps3dev
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /usr/local/ps3dev
           key: ps3dev-psl1ght-v1
@@ -50,7 +50,14 @@ jobs:
             make install
           fi
 
-      - name: Crear shim pthread.h para PSL1GHT
+      - name: Guardar caché del SDK de PS3
+        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /usr/local/ps3dev
+          key: ps3dev-psl1ght-v1
+
+      - name: Crear shim pthread.h y habilitar usrsctp
         run: |
           cat << 'EOF' > /usr/local/ps3dev/ppu/include/pthread.h
           #ifndef _PS3_PTHREAD_SHIM_H_
@@ -119,6 +126,7 @@ jobs:
           static inline pthread_t pthread_self(void) { sys_ppu_thread_t id; sysThreadGetId(&id); return id; }
           #endif
           EOF
+          sed -i 's/^exit 1/# exit 1/' deps/build-usrsctp.sh
 
       - name: Compilar dependencias en orden
         run: |
