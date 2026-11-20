@@ -11,13 +11,22 @@ jobs:
       - name: Descargar GR33N
         uses: actions/checkout@v4
 
-      - name: Descargar ps3toolchain y PSL1GHT
+      - name: Restaurar caché del SDK de PS3
+        id: cache-ps3dev
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/ps3dev
+          key: ps3dev-psl1ght-v1
+
+      - name: Descargar ps3toolchain
+        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
           repository: ps3dev/ps3toolchain
           path: ps3toolchain-sdk
 
       - name: Descargar PSL1GHT oficial
+        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
           repository: ps3dev/PSL1GHT
@@ -32,12 +41,84 @@ jobs:
           export PS3DEV=/usr/local/ps3dev
           export PSL1GHT=$PS3DEV
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
-          cd ps3toolchain-sdk
-          ./toolchain.sh 1 2 3 4 5 6
-          cd ../psl1ght-repo
-          make install-ctrl
-          make
-          make install
+          if [ "${{ steps.cache-ps3dev.outputs.cache-hit }}" != "true" ]; then
+            cd ps3toolchain-sdk
+            ./toolchain.sh 1 2 3 4 5 6
+            cd ../psl1ght-repo
+            make install-ctrl
+            make
+            make install
+          fi
+
+      - name: Crear shim pthread.h para PSL1GHT
+        run: |
+          cat << 'EOF' > /usr/local/ps3dev/ppu/include/pthread.h
+          #ifndef _PS3_PTHREAD_SHIM_H_
+          #define _PS3_PTHREAD_SHIM_H_
+          #include <sys/thread.h>
+          #include <sys/mutex.h>
+          #include <sys/cond.h>
+          #include <stdlib.h>
+          #include <errno.h>
+
+          typedef sys_ppu_thread_t pthread_t;
+          typedef struct { int stacksize; int prio; } pthread_attr_t;
+          typedef sys_mutex_t pthread_mutex_t;
+          typedef int pthread_mutexattr_t;
+          typedef sys_cond_t pthread_cond_t;
+          typedef int pthread_condattr_t;
+          typedef sys_mutex_t pthread_rwlock_t;
+          typedef int pthread_rwlockattr_t;
+
+          #define PTHREAD_MUTEX_INITIALIZER 0
+          #define PTHREAD_COND_INITIALIZER 0
+          #define PTHREAD_RWLOCK_INITIALIZER 0
+
+          static inline int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a) {
+            sys_mutex_attr_t attr;
+            sysMutexAttrInitialize(attr);
+            return sysMutexCreate(m, &attr);
+          }
+          static inline int pthread_mutex_destroy(pthread_mutex_t *m) { return sysMutexDestroy(*m); }
+          static inline int pthread_mutex_lock(pthread_mutex_t *m) { return sysMutexLock(*m, 0); }
+          static inline int pthread_mutex_trylock(pthread_mutex_t *m) { return sysMutexTryLock(*m); }
+          static inline int pthread_mutex_unlock(pthread_mutex_t *m) { return sysMutexUnlock(*m); }
+
+          static inline int pthread_rwlock_init(pthread_rwlock_t *rw, const pthread_rwlockattr_t *a) { return pthread_mutex_init(rw, NULL); }
+          static inline int pthread_rwlock_destroy(pthread_rwlock_t *rw) { return pthread_mutex_destroy(rw); }
+          static inline int pthread_rwlock_rdlock(pthread_rwlock_t *rw) { return pthread_mutex_lock(rw); }
+          static inline int pthread_rwlock_wrlock(pthread_rwlock_t *rw) { return pthread_mutex_lock(rw); }
+          static inline int pthread_rwlock_unlock(pthread_rwlock_t *rw) { return pthread_mutex_unlock(rw); }
+
+          static inline int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *a) {
+            sys_cond_attr_t attr;
+            sysCondAttrInitialize(attr);
+            return sysCondCreate(c, 0, &attr);
+          }
+          static inline int pthread_cond_destroy(pthread_cond_t *c) { return sysCondDestroy(*c); }
+          static inline int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) { return sysCondWait(*c, 0); }
+          static inline int pthread_cond_signal(pthread_cond_t *c) { return sysCondSignal(*c); }
+          static inline int pthread_cond_broadcast(pthread_cond_t *c) { return sysCondBroadcast(*c); }
+
+          struct _ps3_pt_wrap { void *(*fn)(void *); void *arg; };
+          static void _ps3_pt_entry(void *p) {
+            struct _ps3_pt_wrap *w = (struct _ps3_pt_wrap *)p;
+            void *(*fn)(void *) = w->fn;
+            void *arg = w->arg;
+            free(w);
+            fn(arg);
+            sysThreadExit(0);
+          }
+          static inline int pthread_create(pthread_t *t, const pthread_attr_t *a, void *(*fn)(void *), void *arg) {
+            struct _ps3_pt_wrap *w = (struct _ps3_pt_wrap *)malloc(sizeof(*w));
+            if (!w) return ENOMEM;
+            w->fn = fn; w->arg = arg;
+            return sysThreadCreate(t, _ps3_pt_entry, w, 1000, 0x10000, THREAD_JOINABLE, (char *)"sctp");
+          }
+          static inline int pthread_join(pthread_t t, void **ret) { u64 v; return sysThreadJoin(t, &v); }
+          static inline pthread_t pthread_self(void) { sys_ppu_thread_t id; sysThreadGetId(&id); return id; }
+          #endif
+          EOF
 
       - name: Compilar dependencias en orden
         run: |
