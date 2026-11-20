@@ -73,9 +73,9 @@ jobs:
           #include <errno.h>
 
           static inline struct tm *localtime_r(const time_t *timep, struct tm *result) {
-            struct tm *t = localtime(timep);
-            if (!t || !result) return NULL;
-            memcpy(result, t, sizeof(struct tm));
+            (void)timep;
+            if (!result) return NULL;
+            memset(result, 0, sizeof(struct tm));
             return result;
           }
 
