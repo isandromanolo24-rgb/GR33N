@@ -15,8 +15,8 @@ jobs:
         id: cache-ps3dev
         uses: actions/cache/restore@v4
         with:
-          path: /usr/local/ps3dev
-          key: ps3dev-psl1ght-v2
+          path: /home/runner/ps3dev
+          key: ps3dev-psl1ght-runner-v1
 
       - name: Descargar ps3toolchain
         if: steps.cache-ps3dev.outputs.cache-hit != 'true'
@@ -36,9 +36,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake bison flex texinfo libncurses5-dev gcc g++ make wget libelf-dev python3-dev zlib1g-dev libtool libtool-bin git subversion libgmp-dev libmpfr-dev libmpc-dev libssl-dev cmake pkg-config curl
-          sudo mkdir -p /usr/local/ps3dev
-          sudo chmod -R 777 /usr/local/ps3dev
-          export PS3DEV=/usr/local/ps3dev
+          mkdir -p /home/runner/ps3dev
+          export PS3DEV=/home/runner/ps3dev
           export PSL1GHT=$PS3DEV
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
           if [ "${{ steps.cache-ps3dev.outputs.cache-hit }}" != "true" ]; then
@@ -54,30 +53,21 @@ jobs:
         if: always() && steps.cache-ps3dev.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: /usr/local/ps3dev
-          key: ps3dev-psl1ght-v2
+          path: /home/runner/ps3dev
+          key: ps3dev-psl1ght-runner-v1
 
       - name: Crear shim pthread.h, localtime_r y libpthread.a
         run: |
-          export PS3DEV=/usr/local/ps3dev
+          export PS3DEV=/home/runner/ps3dev
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
-          cat << 'EOF' > /usr/local/ps3dev/ppu/include/pthread.h
+          cat << 'EOF' > /home/runner/ps3dev/ppu/include/pthread.h
           #ifndef _PS3_PTHREAD_SHIM_H_
           #define _PS3_PTHREAD_SHIM_H_
           #include <sys/thread.h>
           #include <sys/mutex.h>
           #include <sys/cond.h>
           #include <stdlib.h>
-          #include <string.h>
-          #include <time.h>
           #include <errno.h>
-
-          static inline struct tm *localtime_r(const time_t *timep, struct tm *result) {
-            (void)timep;
-            if (!result) return NULL;
-            memset(result, 0, sizeof(struct tm));
-            return result;
-          }
 
           typedef sys_ppu_thread_t pthread_t;
           typedef struct { int stacksize; int prio; } pthread_attr_t;
@@ -171,11 +161,12 @@ jobs:
           EOF
           echo "void _ps3_pthread_dummy(void) {}" > /tmp/pt_dummy.c
           ppu-gcc -c /tmp/pt_dummy.c -o /tmp/pt_dummy.o
-          ppu-ar rcs /usr/local/ps3dev/ppu/lib/libpthread.a /tmp/pt_dummy.o
+          ppu-ar rcs /home/runner/ps3dev/ppu/lib/libpthread.a /tmp/pt_dummy.o
+          sed -i 's/localtime_r([^,]*, *\([^)]*\))/memset(\1, 0, sizeof(*(\1)))/g' deps/build-usrsctp.sh || true
 
       - name: Compilar dependencias en orden
         run: |
-          export PS3DEV=/usr/local/ps3dev
+          export PS3DEV=/home/runner/ps3dev
           export PSL1GHT=$PS3DEV
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
           sh deps/build-mbedtls.sh
@@ -186,7 +177,7 @@ jobs:
 
       - name: Compilar GR33N y empaquetar PKG
         run: |
-          export PS3DEV=/usr/local/ps3dev
+          export PS3DEV=/home/runner/ps3dev
           export PSL1GHT=$PS3DEV
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
           make
