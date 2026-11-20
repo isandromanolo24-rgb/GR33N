@@ -1,0 +1,38 @@
+name: Compilar GR33N PS3
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ps3dev/psl1ght:latest
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar herramientas basicas
+        run: |
+          apt-get update && apt-get install -y wget curl git cmake automake autoconf libtool pkg-config python3
+
+      - name: Compilar dependencias en orden
+        run: |
+          sh deps/build-mbedtls.sh
+          sh deps/build-libsrtp.sh
+          sh deps/build-usrsctp.sh
+          sh deps/build-libpeer.sh
+          sh deps/build-opus.sh
+
+      - name: Compilar GR33N y empaquetar PKG
+        run: |
+          make
+          make pkg
+
+      - name: Subir GR33N.pkg
+        uses: actions/upload-artifact@v4
+        with:
+          name: gr33n-pkg
+          path: "*.pkg"
+          
