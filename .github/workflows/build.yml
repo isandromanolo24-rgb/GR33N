@@ -57,7 +57,7 @@ jobs:
           path: /usr/local/ps3dev
           key: ps3dev-psl1ght-v2
 
-      - name: Crear shim pthread.h y libpthread.a para PSL1GHT
+      - name: Crear shim pthread.h, localtime_r y libpthread.a
         run: |
           export PS3DEV=/usr/local/ps3dev
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
@@ -68,7 +68,16 @@ jobs:
           #include <sys/mutex.h>
           #include <sys/cond.h>
           #include <stdlib.h>
+          #include <string.h>
+          #include <time.h>
           #include <errno.h>
+
+          static inline struct tm *localtime_r(const time_t *timep, struct tm *result) {
+            struct tm *t = localtime(timep);
+            if (!t || !result) return NULL;
+            memcpy(result, t, sizeof(struct tm));
+            return result;
+          }
 
           typedef sys_ppu_thread_t pthread_t;
           typedef struct { int stacksize; int prio; } pthread_attr_t;
@@ -171,7 +180,7 @@ jobs:
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
           sh deps/build-mbedtls.sh
           sh deps/build-libsrtp.sh
-          sh deps/build-usrsctp.sh
+          sh deps/build-usrsctp.sh || { cat $HOME/.gr33n-deps/.obj-usrsctp/*.err; exit 1; }
           sh deps/build-libpeer.sh
           sh deps/build-opus.sh
 
