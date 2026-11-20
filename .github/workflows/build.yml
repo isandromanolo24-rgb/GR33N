@@ -27,7 +27,7 @@ jobs:
           export PS3DEV=/usr/local/ps3dev
           export PSL1GHT=$PS3DEV
           export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
-          ./toolchain.sh 1 2 3 4 5
+          ./toolchain.sh 1 2 3 4 5 6
 
       - name: Compilar dependencias en orden
         run: |
