@@ -18,44 +18,11 @@ jobs:
           path: /usr/local/ps3dev
           key: ps3dev-psl1ght-v1
 
-      - name: Descargar ps3toolchain
-        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: ps3dev/ps3toolchain
-          path: ps3toolchain-sdk
-
-      - name: Descargar PSL1GHT oficial
-        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: ps3dev/PSL1GHT
-          path: psl1ght-repo
-
-      - name: Instalar herramientas y SDK de PS3
+      - name: Instalar herramientas
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake bison flex texinfo libncurses5-dev gcc g++ make wget libelf-dev python3-dev zlib1g-dev libtool libtool-bin git subversion libgmp-dev libmpfr-dev libmpc-dev libssl-dev cmake pkg-config curl
-          sudo mkdir -p /usr/local/ps3dev
           sudo chmod -R 777 /usr/local/ps3dev
-          export PS3DEV=/usr/local/ps3dev
-          export PSL1GHT=$PS3DEV
-          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
-          if [ "${{ steps.cache-ps3dev.outputs.cache-hit }}" != "true" ]; then
-            cd ps3toolchain-sdk
-            ./toolchain.sh 1 2 3 4 5 6
-            cd ../psl1ght-repo
-            make install-ctrl
-            make
-            make install
-          fi
-
-      - name: Guardar caché del SDK de PS3
-        if: steps.cache-ps3dev.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /usr/local/ps3dev
-          key: ps3dev-psl1ght-v1
 
       - name: Crear shim pthread.h y habilitar usrsctp
         run: |
@@ -126,7 +93,8 @@ jobs:
           static inline pthread_t pthread_self(void) { sys_ppu_thread_t id; sysThreadGetId(&id); return id; }
           #endif
           EOF
-          sed -i 's/^exit 1/# exit 1/' deps/build-usrsctp.sh
+          cat deps/build-usrsctp.sh
+          sed -i 's/exit 1/# exit 1/g' deps/build-usrsctp.sh
 
       - name: Compilar dependencias en orden
         run: |
